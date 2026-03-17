@@ -1,6 +1,11 @@
 import argparse
 
-from lib.hybrid_search import normalize_scores, weighted_search_command
+from lib.evaluation import llm_judge_results
+from lib.hybrid_search import (
+    normalize_scores,
+    weighted_search_command,
+    rrf_search_command,
+)
 
 
 def main() -> None:
@@ -26,6 +31,35 @@ def main() -> None:
     )
     weighted_parser.add_argument(
         "--limit", type=int, default=5, help="Number of results to return (default=5)"
+    )
+
+    rrf_search_parser = subparsers.add_parser(
+        "rrf-search", help="Perform Reciprocal Rank Fusion (RRF) search"
+    )
+    rrf_search_parser.add_argument("query", type=str, help="Search query")
+    rrf_search_parser.add_argument(
+        "-k",
+        type=int,
+        default=60,
+        help="How much more weight we give to higher-ranked results (default=60)",
+    )
+    rrf_search_parser.add_argument(
+        "--limit", type=int, default=5, help="Number of results to return (default=5)"
+    )
+    rrf_search_parser.add_argument(
+        "--enhance",
+        type=str,
+        choices=["spell", "rewrite", "expand"],
+        help="Query enhancement method",
+    )
+    rrf_search_parser.add_argument(
+        "--rerank-method",
+        type=str,
+        choices=["individual", "batch", "cross_encoder"],
+        help="re-ranking method",
+    )
+    rrf_search_parser.add_argument(
+        "--evaluate", action="store_true", help="Use LLM to evaluate result relevance"
     )
 
     args = parser.parse_args()
@@ -54,6 +88,48 @@ def main() -> None:
                     )
                 print(f"   {res['document'][:100]}...")
                 print()
+        case "rrf-search":
+            result = rrf_search_command(
+                args.query,
+                args.k,
+                args.enhance,
+                args.rerank_method,
+                args.limit,
+            )
+            if result["enhanced_query"]:
+                print(
+                    f"Enhanced query ({result['enhance_method']}): '{result['original_query']}' -> '{result['enhanced_query']}'\n"
+                )
+
+            print(
+                f"Reciprocal Rank Fusion Search Results for '{result['query']}' (k={result['k']}):"
+            )
+            for i, res in enumerate(result["results"], 1):
+                print(f"{i}. {res['title']}")
+                if "individual_score" in res:
+                    print(f"   Re-rank Score: {res.get('individual_score', 0):.3f}/10")
+                if "batch_rank" in res:
+                    print(f"   Re-rank Rank: {res.get('batch_rank', 0)}")
+                if "crossencoder_score" in res:
+                    print(
+                        f"   Cross Encoder Score: {res.get('crossencoder_score', 0):.3f}"
+                    )
+                print(f"   RRF Score: {res.get('score', 0):.3f}")
+                metadata = res.get("metadata", {})
+                if "bm25_rank" in metadata and "semantic_rank" in metadata:
+                    print(
+                        f"   BM25 Rank: {metadata['bm25_rank']}, Semantic Rank: {metadata['semantic_rank']}"
+                    )
+                print(f"   {res['document'][:100]}...")
+                print()
+
+            if args.evaluate:
+                print("LLM Evaluation (0-3 relevance scale):")
+
+                llm_scores = llm_judge_results(args.query, result["results"])
+
+                for i, (res, score) in enumerate(zip(result["results"], llm_scores), 1):
+                    print(f"{i}. {res['title']}: {score}/3")
         case _:
             parser.print_help()
 
